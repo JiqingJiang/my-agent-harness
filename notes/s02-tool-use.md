@@ -191,6 +191,68 @@ LLM 看到所有工具的 name + description，根据用户的问题自己判断
 | run_write 用了读模式 | 写入不生效 | `open(path)` 默认是 `"r"` 模式 | 改成 `open(path, "w")` |
 | run_read 没有异常处理 | FileNotFoundError 崩溃整个程序 | 文件不存在时直接抛异常 | 加 try/except，返回错误字符串 |
 | run_edit 没检查 old_text | 无意义替换 | old_text 不在文件里，replace 返回原字符串 | 先 `if old_text not in content` 检查 |
+| 危险命令过滤太窄 | `rm hello.py` 直接执行，文件被删了 | 黑名单只有 `rm -rf /`，没有覆盖 `rm` 的其他用法 | 见下方安全板块 |
+| sleep 类命令 DoS | `sleep 200` 让 agent 卡住 2 分钟不响应 | 即有 timeout=120，120 秒等待本身就是拒绝服务 | 危险列表加 `"sleep "` 拦截，或缩短 timeout |
+
+## 8. Agent 安全 — 必须重视
+
+### 8.1 已实现的两层防护
+
+**第一层：危险命令拦截（run_bash）**
+
+```python
+dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/", "sleep "]
+if any(d in command for d in dangerous):
+    return "Error: Dangerous command blocked"
+```
+
+问题：黑名单太窄。`rm hello.py` 不在列表里，直接执行了。
+这个黑名单只是最低限度的兜底，**不能依赖它做完整的安全防护**。
+
+**第二层：超时保护（subprocess timeout）**
+
+```python
+subprocess.run(command, ..., timeout=120)
+except subprocess.TimeoutExpired:
+    return "Error: Timeout (120s)"
+```
+
+防止 `sleep 99999` 之类的命令卡死程序。
+
+### 8.2 尚未实现：路径沙箱
+
+`safe_path()` 的作用是限制文件读写操作不逃出工作目录：
+
+```python
+from pathlib import Path
+
+WORKDIR = Path.cwd()
+
+def safe_path(p: str) -> Path:
+    path = (WORKDIR / p).resolve()
+    if not path.is_relative_to(WORKDIR):
+        raise ValueError(f"Path escapes workspace: {p}")
+    return path
+```
+
+原理：
+- `WORKDIR / p`：把相对路径拼成完整路径
+- `.resolve()`：解析 `../` 等路径跳转，得到真实绝对路径
+- `.is_relative_to(WORKDIR)`：检查最终路径是否还在工作目录内
+
+**防御的场景：** LLM 尝试 `read_file("../../etc/passwd")` → `resolve()` 后变成 `/etc/passwd` → 不在 WORKDIR 下 → 拦截。
+
+注意：路径沙箱只保护 read/write/edit 三个专用工具，**bash 工具无法被路径沙箱保护**，因为 bash 可以执行任意命令。
+
+### 8.3 安全的本质
+
+Agent 安全是一个纵深防御（defense in depth）问题，没有银弹：
+- 黑名单 → 只能防已知的危险模式，无法防 `rm hello.py` 这种正常但破坏性的命令
+- 路径沙箱 → 保护文件操作，不保护 bash
+- 超时 → 防卡死，不防破坏
+- 最强的安全是 **人类审批**：破坏性操作必须经过用户确认（生产级 agent 才会做）
+
+当前阶段：危险命令拦截 + 超时够用。路径沙箱留到后面学 s12（worktree 隔离）时再补。
 
 ## 8. s01 → s02 对比
 

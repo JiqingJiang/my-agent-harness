@@ -40,4 +40,6 @@ pip install -r requirements.txt
 |----|------|------|
 | s01 Agent Loop | 完成 | 2026-04-26 |
 | s02 Tool Use | 完成 | 2026-04-26 |
-| s03-s12 | 进行中 | — |
+| s03 Todo Write | 完成 | 2026-04-26 |
+| s04 Subagent | 完成 | 2026-04-26 |
+| s05-s12 | 进行中 | — |

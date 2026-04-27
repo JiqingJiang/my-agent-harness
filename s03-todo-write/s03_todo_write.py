@@ -11,6 +11,10 @@
 #   2. 做一个五子棋游戏                       → 观察是否先调用 todo
 #   3. 帮我重构 utils.py                      → 观察任务状态变化
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from anthropic import Anthropic
 from dotenv import load_dotenv
 import os

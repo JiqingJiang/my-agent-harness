@@ -1,14 +1,15 @@
-# s04: Subagent — 子 Agent 与上下文隔离
+# s05: Skill Loading — 按需加载知识
 #
 # 新增概念：
-#   - 子 agent：独立 messages，做完任务只返回摘要
-#   - 工具拆分：子 agent 没有 todo 和 task（不能递归派生）
-#   - task 工具：主 agent 派生子 agent 的入口
-#   - 安全限制：子 agent 最大 30 轮
+#   - SkillLoader：扫描 skills/ 目录，解析 SKILL.md 的 frontmatter 和 body
+#   - 两层注入：system prompt 只放目录（Layer 1），load_skill 工具返回完整知识（Layer 2）
+#   - 工具 description 写法：做什么 + 什么时候用 + 跟其他工具的区别
+#   - f-string system prompt：SKILL_LOADER 必须在 SYSTEM_PROMPT 之前创建
 #
 # 试试这些 prompt：
-#   1. 创建一个计算器项目，包含加减乘除功能    → 先列计划，再用 task 派生子 agent 执行
-#   2. 当前目录有哪些 Python 文件，每个做什么   → 可以用 task 派生探索型子 agent
+#   1. 加载 code-review 这个 skill                    → 观察 load_skill 工具调用
+#   2. 帮我审查一下 utils.py 的代码                   → LLM 先加载 skill 再审查
+#   3. 我想处理一个 PDF 文件，该怎么做                 → LLM 先加载 pdf skill
 
 import sys
 from pathlib import Path
@@ -20,19 +21,25 @@ import os
 import subprocess
 
 from utils import cprint, log, log_and_print
+from SkillLoader import SkillLoader
 
 load_dotenv(override=True)
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
+SKILL_LOADER = SkillLoader("skills")
 
-SECTION = "s04"
+SECTION = "s05"
 
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT = f"""
   - 面对多步任务时，**必须**先用 todo 工具列出计划
   - 开始执行某一步前，把它标记为 in_progress
   - 完成后标记为 completed
   - 列完计划后立即开始执行，不要等待用户确认
-  - 可以使用 task 工具派生子 agent 执行具体子任务，子 agent 会独立完成后返回摘要"""
+  - 可以使用 task 工具派生子 agent 执行具体子任务
+  - 可以使用 load_skill 工具加载专业知识
+  Skills available:
+{SKILL_LOADER.get_descriptions()}
+"""
 
 SUBAGENT_SYSTEM_PROMPT = "你是一个子 agent。执行给定的任务，完成后返回一段简洁的摘要。"
 
@@ -41,7 +48,7 @@ SUBAGENT_SYSTEM_PROMPT = "你是一个子 agent。执行给定的任务，完成
 base_tools = [
     {
         "name": "bash",
-        "description": "执行bash命令",
+        "description": "执行 bash 命令。用于运行脚本、安装依赖、查看目录结构等系统操作。",
         "input_schema": {
             "type": "object",
             "properties": {"command": {"type": "string"}},
@@ -50,7 +57,7 @@ base_tools = [
     },
     {
         "name": "read_file",
-        "description": "读文件",
+        "description": "读取文件内容。查看已有代码、配置文件或日志时使用。",
         "input_schema": {
             "type": "object",
             "properties": {"path": {"type": "string"}},
@@ -59,7 +66,7 @@ base_tools = [
     },
     {
         "name": "write_file",
-        "description": "创建文件，写入内容",
+        "description": "创建新文件并写入内容。需要创建新代码文件或配置文件时使用。",
         "input_schema": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
@@ -68,7 +75,7 @@ base_tools = [
     },
     {
         "name": "edit_file",
-        "description": "读取文件，找到 old_text，替换成 new_text，写回",
+        "description": "精确替换文件中的文本片段。修改现有代码或配置时使用，比全量重写更安全。",
         "input_schema": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}},
@@ -79,7 +86,7 @@ base_tools = [
 
 todo_tool = {
     "name": "todo",
-    "description": "更新任务列表。传入完整的 items 数组，每次全量替换。",
+    "description": "管理任务计划。多步任务开始前先用此工具列出所有步骤，执行中更新状态（pending → in_progress → completed）。传入完整的 items 数组，每次全量替换。",
     "input_schema": {
         "type": "object",
         "properties": {"items": {
@@ -99,7 +106,7 @@ todo_tool = {
 
 task_tool = {
     "name": "task",
-    "description": "派生一个子 agent 执行子任务。子 agent 有独立的上下文，完成后返回摘要。",
+    "description": "派生子 agent 执行独立的子任务。子 agent 拥有干净的上下文，适合需要大量探索或多文件操作的任务，完成后只返回摘要。",
     "input_schema": {
         "type": "object",
         "properties": {"prompt": {"type": "string"}},
@@ -107,10 +114,20 @@ task_tool = {
     }
 }
 
-# 主 agent 拥有全部工具（base + todo + task）
-parent_tools = base_tools + [todo_tool, task_tool]
-# 子 agent 只有基础工具（不能列计划、不能再派生）
-child_tools = base_tools
+load_skill = {
+    "name": "load_skill",
+    "description": "按需加载专业知识。面对不熟悉的领域（如代码审查、PDF处理、MCP构建等）时，先加载对应 skill 获取专家级指引。",
+    "input_schema": {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+    }
+}
+
+# 主 agent 拥有全部工具（base + todo + task + load_skill）
+parent_tools = base_tools + [todo_tool, task_tool, load_skill]
+# 子 agent 拥有基础工具 + load_skill（不能列计划、不能再派生，但可以加载知识）
+child_tools = base_tools + [load_skill]
 
 # ── Handler 函数 ──
 
@@ -208,6 +225,9 @@ def run_subagent(prompt: str) -> str:
     )
     return text or "(no summary)"
 
+def run_load_skill(name: str) -> str:
+    return SKILL_LOADER.get_content(name)
+
 # ── Dispatch Map ──
 
 # 基础工具的 handler（主 agent 和子 agent 共用）
@@ -216,6 +236,7 @@ BASE_HANDLERS = {
     "read_file": run_read,
     "write_file": run_write,
     "edit_file": run_edit,
+    "load_skill": run_load_skill
 }
 
 # 主 agent 的 handler（基础 + todo + task）

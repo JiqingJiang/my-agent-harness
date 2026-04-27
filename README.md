@@ -24,7 +24,7 @@
 
 ## 学习来源
 
-基于 [learn-claude-code](https://github.com/anthropics/learn-claude-code) 项目，但所有代码均为从零手搓，非抄源码。
+基于 [learn-claude-code](https://github.com/anthropics/learn-claude-code) 项目，让Claude Code参考该项目引导我自己思考，从零手搓。
 
 ## 环境配置
 
@@ -36,10 +36,11 @@ pip install -r requirements.txt
 
 ## 进度
 
-| 节 | 状态 | 日期 |
-|----|------|------|
-| s01 Agent Loop | 完成 | 2026-04-26 |
-| s02 Tool Use | 完成 | 2026-04-26 |
-| s03 Todo Write | 完成 | 2026-04-26 |
-| s04 Subagent | 完成 | 2026-04-26 |
-| s05-s12 | 进行中 | — |
+| 节                | 状态   | 日期       |
+| ----------------- | ------ | ---------- |
+| s01 Agent Loop    | 完成   | 2026-04-26 |
+| s02 Tool Use      | 完成   | 2026-04-26 |
+| s03 Todo Write    | 完成   | 2026-04-26 |
+| s04 Subagent      | 完成   | 2026-04-26 |
+| s05 Skill Loading | 完成   | 2026-04-27 |
+| s06-s12           | 进行中 | —         |
